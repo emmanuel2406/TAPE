@@ -53,3 +53,8 @@ htmlcov/
 # For SR
 secrets.yaml
 problems
+
+.env
+
+# data file
+examples/*/data/

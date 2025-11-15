@@ -1,0 +1,16 @@
+# reproducing EPLB results
+# Source the setup script to activate environment and install package
+# source openevolve_setup.sh
+
+# Change to openevolve directory to avoid namespace package conflict
+# (when running from workspace root, Python treats openevolve/ as namespace package)
+cd openevolve
+
+python -m openevolve.cli \
+  examples/eplb/initial_program.py \
+  examples/eplb/evaluator.py \
+  --config examples/eplb/config.yaml \
+  --iterations 5 \
+  --checkpoint examples/eplb/output/checkpoints/checkpoint_10 \
+  --output examples/eplb/output
+
