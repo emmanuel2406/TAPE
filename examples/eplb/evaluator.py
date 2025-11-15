@@ -10,7 +10,7 @@ import torch
 
 # Get the directory where this evaluator file is located
 EVALUATOR_DIR = os.path.dirname(os.path.abspath(__file__))
-WORKLOAD_PATH = os.path.join(EVALUATOR_DIR, "expert-load.json")
+WORKLOAD_PATH = os.path.join(EVALUATOR_DIR, "data/expert-load.json")
 REBALANCE_INTERVAL = 100
 
 NUM_REPLICAS = 288
