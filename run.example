@@ -10,7 +10,7 @@ python -m openevolve.cli \
   examples/eplb/initial_program.py \
   examples/eplb/evaluator.py \
   --config examples/eplb/config.yaml \
-  --iterations 5 \
+  --iterations 300 \
   --checkpoint examples/eplb/output/checkpoints/checkpoint_10 \
   --output examples/eplb/output
 

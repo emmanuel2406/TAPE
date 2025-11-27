@@ -126,6 +126,7 @@ def evaluate(program_path: str) -> EvaluationResult:
         
         balancedness_scores = []
         times = []
+        raw_times = []
         for i in range(len(workloads) - 1):
             start_time = time.perf_counter()
             _, log2phy, logcnt = program.rebalance_experts(
@@ -135,19 +136,23 @@ def evaluate(program_path: str) -> EvaluationResult:
                 NUM_NODES,
                 NUM_GPUS,
             )
+            end_raw_time = time.perf_counter()
             balancedness_score = simulate_inference(log2phy, logcnt, workloads[i + 1])
             end_time = time.perf_counter()
             balancedness_scores.append(balancedness_score)
             times.append(end_time - start_time)
+            raw_times.append(end_raw_time - start_time)
         avg_balancedness_score = sum(balancedness_scores) / len(balancedness_scores)
         avg_time = sum(times) / len(times)
+        avg_raw_time = sum(raw_times) / len(raw_times)
         speed_score = 0.02 / avg_time
-        print(f'avg_time: {avg_time}, speed_score: {speed_score}')
+        print(f'avg_time: {avg_time}, avg_raw_time: {avg_raw_time}, speed_score: {speed_score}')
         combined_score = (avg_balancedness_score + speed_score) / 2
         return {
             "balancedness_score": float(avg_balancedness_score),
             "speed_score": float(speed_score),
             "combined_score": float(combined_score),
+            "avg_raw_time": float(avg_raw_time),
         }
     except Exception as e:
         traceback.print_exc()
