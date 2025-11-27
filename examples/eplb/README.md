@@ -16,3 +16,7 @@ Download the workload file from [Hugging Face](https://huggingface.co/datasets/a
 ```bash
 wget https://huggingface.co/datasets/abmfy/eplb-openevolve/resolve/main/expert-load.json
 ```
+
+The original evaluator from Barbarians at the Gate is in `evaluator.py`. 
+
+Our new evaluator which also simulates the communication between GPUs during inference is in `TAPE_evaluator.py`.
