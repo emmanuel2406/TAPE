@@ -21,8 +21,14 @@ NUM_NODES = 4
 
 # Ratio of GPU-to-GPU communication cost within a node vs GPU-to-GPU communication cost between nodes
 INTRANODE_COMM = 1
-INTERNODE_COMM = 30
+INTERNODE_COMM = 18
 COMM_SCORE_SCALE = 10
+COMM_COMPUTATION_SCALE = 0.1
+
+# Weight copying cost constants
+# Number of bytes for 1 expert's parameters (e.g., for a typical MoE expert with ~1B parameters, this would be ~4GB for float32)
+BYTES_PER_EXPERT = 4_000_000_000  # 4GB per expert (adjust based on your model)COMM
+WEIGHT_COPY_SCORE_SCALE = 0.5
 
 # Check if workload file exists
 if not os.path.exists(WORKLOAD_PATH):
@@ -50,8 +56,78 @@ def load_workloads(path: str) -> list[torch.Tensor]:
 class EvaluationResult(TypedDict, total=False):
     balancedness_score: float
     speed_score: float
+    communication_score: float
+    weight_copy_score: float
     combined_score: float
     error: str
+
+def calculate_weight_copy_cost(log2phy: torch.Tensor, logcnt: torch.Tensor) -> float:
+    '''
+    Calculate the communication cost for copying replica weights from source GPUs to replica GPUs.
+    Returns a normalized efficiency score (higher is better, similar to communication_efficiency).
+    '''
+    num_layers, num_logical_experts, _ = log2phy.shape
+    
+    # Calculate mapping from physical experts to GPUs and nodes
+    num_physical_experts = NUM_REPLICAS
+    phy_experts_per_gpu = num_physical_experts // NUM_GPUS
+    gpus_per_node = NUM_GPUS // NUM_NODES
+    
+    total_weight_copy_cost = 0.0
+    min_weight_copy_cost = 0.0  # Theoretical minimum (all intra-node copies)
+    
+    for layer_id in range(num_layers):
+        for logical_id in range(num_logical_experts):
+            num_replicas = int(logcnt[layer_id][logical_id].item())
+            
+            # Skip if no replicas (no copying needed)
+            if num_replicas <= 1:
+                continue
+            
+            # Get physical expert mapping
+            physical_ids = log2phy[layer_id][logical_id][:num_replicas]
+            
+            # The first physical expert is the source (original)
+            source_physical_id = int(physical_ids[0].item())
+            source_gpu = source_physical_id // phy_experts_per_gpu
+            source_node = source_gpu // gpus_per_node
+            
+            # The remaining physical experts are replicas that need weight copying
+            replica_physical_ids = physical_ids[1:]
+            
+            # Calculate minimum cost: all replicas on same node as source
+            # In optimal case, we place replicas on same node (intra-node cost)
+            num_replicas_to_copy = len(replica_physical_ids)
+            replicas_on_same_node = min(num_replicas_to_copy, gpus_per_node - 1)  # -1 because source GPU already has the expert
+            min_weight_copy_cost += replicas_on_same_node * BYTES_PER_EXPERT * INTRANODE_COMM
+            
+            # Calculate actual cost
+            for replica_physical_id in replica_physical_ids:
+                target_physical_id = int(replica_physical_id.item())
+                target_gpu = target_physical_id // phy_experts_per_gpu
+                target_node = target_gpu // gpus_per_node
+                
+                # If source and target are on same GPU, no copying needed (shouldn't happen for replicas, but check anyway)
+                if source_gpu == target_gpu:
+                    continue
+                
+                # Determine communication cost based on node placement
+                if source_node == target_node:
+                    # Intra-node communication
+                    copy_cost = BYTES_PER_EXPERT * INTRANODE_COMM
+                else:
+                    # Inter-node communication
+                    copy_cost = BYTES_PER_EXPERT * INTERNODE_COMM
+                
+                total_weight_copy_cost += copy_cost
+    
+    # Normalize weight copy cost (min / actual)
+    # This gives a ratio where 1.0 is optimal (minimum cost) and < 1.0 is worse
+    weight_copy_efficiency = WEIGHT_COPY_SCORE_SCALE * min_weight_copy_cost / total_weight_copy_cost if total_weight_copy_cost > 0 else 0.0
+    
+    print(f'weight_copy_cost: {total_weight_copy_cost}, min_weight_copy_cost: {min_weight_copy_cost}, weight_copy_efficiency: {weight_copy_efficiency}')
+    
+    return weight_copy_efficiency
 
 def simulate_inference(log2phy: torch.Tensor, logcnt: torch.Tensor, workload: torch.Tensor) -> tuple[float, float]:
     '''
@@ -191,12 +267,28 @@ def simulate_inference(log2phy: torch.Tensor, logcnt: torch.Tensor, workload: to
                     
                     total_communication_cost += comm_cost
     
+    # Calculate total computation cost (sum of all tokens processed)
+    total_computation_cost = workload.sum().item()
+    
+    # Calculate exposed communication: only the communication cost beyond what's hidden by computation
+    # Use ReLU(communication - Z * computation) where Z is COMM_COMPUTATION_SCALE
+    exposed_communication_cost = torch.clamp(
+        torch.tensor(total_communication_cost) - COMM_COMPUTATION_SCALE * total_computation_cost,
+        min=0.0
+    ).item()
+    exposed_min_communication_cost = torch.clamp(
+        torch.tensor(min_communication_cost) - COMM_COMPUTATION_SCALE * total_computation_cost,
+        min=0.0
+    ).item()
+    print("COMMUNICATION COST: ", total_computation_cost, min_communication_cost)
+    
     # Normalize communication cost similar to balancedness (min / actual)
     # This gives a ratio where 1.0 is optimal (minimum cost) and < 1.0 is worse
     # Similar to balancedness where 1.0 is perfect balance and < 1.0 is imbalanced
-    communication_efficiency = COMM_SCORE_SCALE * min_communication_cost / total_communication_cost if total_communication_cost > 0 else 0.0
+    # Use exposed communication costs instead of raw communication costs
+    communication_efficiency = COMM_SCORE_SCALE * exposed_min_communication_cost / exposed_communication_cost if exposed_communication_cost > 0 else 0.0
     
-    print(f'balancedness: {balancedness} avg_load: {avg_load}, max_load: {max_load}, communication_cost: {total_communication_cost}, min_comm_cost: {min_communication_cost}, communication_efficiency: {communication_efficiency}')
+    print(f'balancedness: {balancedness} avg_load: {avg_load}, max_load: {max_load}, communication_cost: {total_communication_cost}, min_comm_cost: {min_communication_cost}, computation_cost: {total_computation_cost}, exposed_comm_cost: {exposed_communication_cost}, exposed_min_comm_cost: {exposed_min_communication_cost}, communication_efficiency: {communication_efficiency}')
     
     return balancedness, communication_efficiency
 
@@ -215,6 +307,8 @@ def evaluate(program_path: str) -> EvaluationResult:
             return {
                 "balancedness_score": 0.0,
                 "speed_score": 0.0,
+                "communication_score": 0.0,
+                "weight_copy_score": 0.0,
                 "combined_score": 0.0,
                 "error": "Missing `rebalance_experts` function",
             }
@@ -224,6 +318,7 @@ def evaluate(program_path: str) -> EvaluationResult:
         
         balancedness_scores = []
         communication_scores = []
+        weight_copy_scores = []
         times = []
         raw_times = []
         for i in range(len(workloads) - 1):
@@ -237,22 +332,27 @@ def evaluate(program_path: str) -> EvaluationResult:
             )
             end_raw_time = time.perf_counter()
             balancedness_score, communication_score = simulate_inference(log2phy, logcnt, workloads[i + 1])
+            weight_copy_score = calculate_weight_copy_cost(log2phy, logcnt)
             end_time = time.perf_counter()
             balancedness_scores.append(balancedness_score)
             communication_scores.append(communication_score)
+            weight_copy_scores.append(weight_copy_score)
             times.append(end_time - start_time)
             raw_times.append(end_raw_time - start_time)
         avg_balancedness_score = sum(balancedness_scores) / len(balancedness_scores)
+        avg_communication_score = sum(communication_scores) / len(communication_scores)
+        avg_weight_copy_score = sum(weight_copy_scores) / len(weight_copy_scores)
         avg_time = sum(times) / len(times)
         avg_raw_time = sum(raw_times) / len(raw_times)
         speed_score = 0.02 / avg_time
         print(f'avg_time: {avg_time}, avg_raw_time: {avg_raw_time}, speed_score: {speed_score}')
-        combined_score = (avg_balancedness_score + speed_score + communication_score) / 3
+        combined_score = (avg_balancedness_score + speed_score + avg_communication_score + avg_weight_copy_score) / 4
         return {
             "balancedness_score": float(avg_balancedness_score),
             "speed_score": float(speed_score),
             "avg_raw_time": float(avg_raw_time),
-            "communication_score": float(communication_score),
+            "communication_score": float(avg_communication_score),
+            "weight_copy_score": float(avg_weight_copy_score),
             "combined_score": float(combined_score),
         }
     except Exception as e:
@@ -262,6 +362,7 @@ def evaluate(program_path: str) -> EvaluationResult:
             "balancedness_score": 0.0,
             "speed_score": 0.0,
             "communication_score": 0.0,
+            "weight_copy_score": 0.0,
             "combined_score": 0.0,
             "error": str(e),
         }
@@ -270,6 +371,7 @@ def evaluate(program_path: str) -> EvaluationResult:
         "balancedness_score": 0.0,
         "speed_score": 0.0,
         "communication_score": 0.0,
+        "weight_copy_score": 0.0,
         "combined_score": 0.0,
         "error": "No error",
     }
