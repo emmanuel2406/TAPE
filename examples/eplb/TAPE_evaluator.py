@@ -28,7 +28,9 @@ COMM_COMPUTATION_SCALE = 0.1
 # Weight copying cost constants
 # Number of bytes for 1 expert's parameters (e.g., for a typical MoE expert with ~1B parameters, this would be ~4GB for float32)
 BYTES_PER_EXPERT = 4_000_000_000  # 4GB per expert (adjust based on your model)COMM
-WEIGHT_COPY_SCORE_SCALE = 0.5
+# Cost for copying weights within the same GPU (local memory copy - minimal but not zero)
+INTRAGPU_COPY_COST = 0.0
+WEIGHT_COPY_SCORE_SCALE = 0.1
 
 # Check if workload file exists
 if not os.path.exists(WORKLOAD_PATH):
@@ -63,7 +65,12 @@ class EvaluationResult(TypedDict, total=False):
 
 def calculate_weight_copy_cost(log2phy: torch.Tensor, logcnt: torch.Tensor) -> float:
     '''
-    Calculate the communication cost for copying replica weights from source GPUs to replica GPUs.
+    Calculate the communication cost for copying replica weights from primary GPUs to replica GPUs.
+    
+    The model: Each logical expert has a primary location (first replica) where the weights are stored.
+    Additional replicas of the same logical expert need to copy weights from the primary location
+    to their target GPU location. The cost depends on the network distance (intra-GPU, intra-node, or inter-node).
+    
     Returns a normalized efficiency score (higher is better, similar to communication_efficiency).
     '''
     num_layers, num_logical_experts, _ = log2phy.shape
@@ -77,55 +84,96 @@ def calculate_weight_copy_cost(log2phy: torch.Tensor, logcnt: torch.Tensor) -> f
     min_weight_copy_cost = 0.0  # Theoretical minimum (all intra-node copies)
     
     for layer_id in range(num_layers):
+        # Build mapping from physical expert ID to (logical_expert_id, replica_rank)
+        # phy_to_logical[physical_id] = (logical_id, rank)
+        phy_to_logical = {}
+        primary_locations = {}  # primary_locations[logical_id] = (primary_physical_id, primary_gpu, primary_node)
+        
+        # First pass: build mapping and identify primary locations
         for logical_id in range(num_logical_experts):
             num_replicas = int(logcnt[layer_id][logical_id].item())
             
-            # Skip if no replicas (no copying needed)
+            if num_replicas <= 0:
+                continue
+            
+            # Get physical expert mapping for this logical expert
+            physical_ids = log2phy[layer_id][logical_id][:num_replicas]
+            
+            # The first physical expert is the primary (has the original weights)
+            primary_physical_id = int(physical_ids[0].item())
+            primary_gpu = primary_physical_id // phy_experts_per_gpu
+            primary_node = primary_gpu // gpus_per_node
+            
+            # Store primary location for this logical expert
+            primary_locations[logical_id] = (primary_physical_id, primary_gpu, primary_node)
+            
+            # Build mapping: for each physical expert, record which logical expert it represents and its rank
+            for rank in range(num_replicas):
+                physical_id = int(physical_ids[rank].item())
+                phy_to_logical[physical_id] = (logical_id, rank)
+        
+        # Second pass: calculate copy cost for each replica (rank > 0)
+        for logical_id in range(num_logical_experts):
+            num_replicas = int(logcnt[layer_id][logical_id].item())
+            
+            # Skip if no replicas or only one replica (no copying needed)
             if num_replicas <= 1:
                 continue
             
-            # Get physical expert mapping
+            # Get primary location for this logical expert
+            primary_physical_id, primary_gpu, primary_node = primary_locations[logical_id]
+            
+            # Get all physical experts for this logical expert
             physical_ids = log2phy[layer_id][logical_id][:num_replicas]
             
-            # The first physical expert is the source (original)
-            source_physical_id = int(physical_ids[0].item())
-            source_gpu = source_physical_id // phy_experts_per_gpu
-            source_node = source_gpu // gpus_per_node
-            
-            # The remaining physical experts are replicas that need weight copying
-            replica_physical_ids = physical_ids[1:]
-            
-            # Calculate minimum cost: all replicas on same node as source
-            # In optimal case, we place replicas on same node (intra-node cost)
-            num_replicas_to_copy = len(replica_physical_ids)
-            replicas_on_same_node = min(num_replicas_to_copy, gpus_per_node - 1)  # -1 because source GPU already has the expert
-            min_weight_copy_cost += replicas_on_same_node * BYTES_PER_EXPERT * INTRANODE_COMM
-            
-            # Calculate actual cost
-            for replica_physical_id in replica_physical_ids:
-                target_physical_id = int(replica_physical_id.item())
-                target_gpu = target_physical_id // phy_experts_per_gpu
-                target_node = target_gpu // gpus_per_node
+            # Calculate cost for each replica (skip the primary, rank 0)
+            num_replicas_needing_copy = 0
+            for rank in range(1, num_replicas):  # Start from rank 1 (rank 0 is primary)
+                replica_physical_id = int(physical_ids[rank].item())
+                replica_gpu = replica_physical_id // phy_experts_per_gpu
+                replica_node = replica_gpu // gpus_per_node
                 
-                # If source and target are on same GPU, no copying needed (shouldn't happen for replicas, but check anyway)
-                if source_gpu == target_gpu:
-                    continue
+                num_replicas_needing_copy += 1
                 
-                # Determine communication cost based on node placement
-                if source_node == target_node:
-                    # Intra-node communication
+                # Determine communication cost based on placement relative to primary
+                if primary_gpu == replica_gpu:
+                    # Same GPU: minimal cost for local memory copy
+                    copy_cost = BYTES_PER_EXPERT * INTRAGPU_COPY_COST
+                elif primary_node == replica_node:
+                    # Same node, different GPU: intra-node network cost
                     copy_cost = BYTES_PER_EXPERT * INTRANODE_COMM
                 else:
-                    # Inter-node communication
+                    # Different node: inter-node network cost (worst case)
                     copy_cost = BYTES_PER_EXPERT * INTERNODE_COMM
                 
                 total_weight_copy_cost += copy_cost
+            
+            # Calculate minimum cost for this logical expert's replicas
+            # Optimal placement: as many replicas as possible on same GPU/node as primary
+            if num_replicas_needing_copy > 0:
+                # Maximum replicas that can fit on same GPU (excluding the primary)
+                max_on_same_gpu = max(0, phy_experts_per_gpu - 1)
+                replicas_on_same_gpu = min(num_replicas_needing_copy, max_on_same_gpu)
+                replicas_on_same_node = num_replicas_needing_copy - replicas_on_same_gpu
+                
+                min_cost = (replicas_on_same_gpu * BYTES_PER_EXPERT * INTRAGPU_COPY_COST +
+                           replicas_on_same_node * BYTES_PER_EXPERT * INTRANODE_COMM)
+                min_weight_copy_cost += min_cost
     
     # Normalize weight copy cost (min / actual)
     # This gives a ratio where 1.0 is optimal (minimum cost) and < 1.0 is worse
-    weight_copy_efficiency = WEIGHT_COPY_SCORE_SCALE * min_weight_copy_cost / total_weight_copy_cost if total_weight_copy_cost > 0 else 0.0
+    # The ratio should be <= 1.0 since min_weight_copy_cost <= total_weight_copy_cost (in theory)
+    # Cap the score at 1.0 to ensure it stays in [0, 1] range even if there are edge cases
+    if total_weight_copy_cost > 0:
+        weight_copy_efficiency = min_weight_copy_cost / total_weight_copy_cost
+        # Cap the score at 1.0 to ensure it stays in [0, 1] range
+        weight_copy_efficiency = min(weight_copy_efficiency, 1.0)
+    else:
+        # If total_weight_copy_cost is 0, there are no replicas that need copying
+        # (all logical experts have only 1 replica). This is the baseline case.
+        weight_copy_efficiency = 1.0
     
-    print(f'weight_copy_cost: {total_weight_copy_cost}, min_weight_copy_cost: {min_weight_copy_cost}, weight_copy_efficiency: {weight_copy_efficiency}')
+    print(f'weight_copy_cost: {total_weight_copy_cost:.2e}, min_weight_copy_cost: {min_weight_copy_cost:.2e}, weight_copy_efficiency: {weight_copy_efficiency:.4f}')
     
     return weight_copy_efficiency
 
