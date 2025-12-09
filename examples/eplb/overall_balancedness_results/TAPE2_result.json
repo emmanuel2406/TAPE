@@ -1,0 +1,26 @@
+Evaluating workloads:   0%|          | 0/11 [00:00<?, ?workload/s]Evaluating workloads:   0%|          | 0/11 [00:01<?, ?workload/s, balancedness=0.7879, avg=0.7879]Evaluating workloads:   9%|▉         | 1/11 [00:01<00:19,  1.95s/workload, balancedness=0.7879, avg=0.7879]Evaluating workloads:   9%|▉         | 1/11 [00:08<00:19,  1.95s/workload, balancedness=0.8633, avg=0.8256]Evaluating workloads:  18%|█▊        | 2/11 [00:08<00:42,  4.74s/workload, balancedness=0.8633, avg=0.8256]Evaluating workloads:  18%|█▊        | 2/11 [00:15<00:42,  4.74s/workload, balancedness=0.8613, avg=0.8375]Evaluating workloads:  27%|██▋       | 3/11 [00:15<00:44,  5.55s/workload, balancedness=0.8613, avg=0.8375]Evaluating workloads:  27%|██▋       | 3/11 [00:21<00:44,  5.55s/workload, balancedness=0.8492, avg=0.8404]Evaluating workloads:  36%|███▋      | 4/11 [00:21<00:41,  5.91s/workload, balancedness=0.8492, avg=0.8404]Evaluating workloads:  36%|███▋      | 4/11 [00:28<00:41,  5.91s/workload, balancedness=0.8278, avg=0.8379]Evaluating workloads:  45%|████▌     | 5/11 [00:28<00:36,  6.09s/workload, balancedness=0.8278, avg=0.8379]Evaluating workloads:  45%|████▌     | 5/11 [00:34<00:36,  6.09s/workload, balancedness=0.7879, avg=0.8296]Evaluating workloads:  55%|█████▍    | 6/11 [00:34<00:30,  6.07s/workload, balancedness=0.7879, avg=0.8296]Evaluating workloads:  55%|█████▍    | 6/11 [00:39<00:30,  6.07s/workload, balancedness=0.7632, avg=0.8201]Evaluating workloads:  64%|██████▎   | 7/11 [00:39<00:23,  5.83s/workload, balancedness=0.7632, avg=0.8201]Evaluating workloads:  64%|██████▎   | 7/11 [00:44<00:23,  5.83s/workload, balancedness=0.7679, avg=0.8136]Evaluating workloads:  73%|███████▎  | 8/11 [00:44<00:16,  5.56s/workload, balancedness=0.7679, avg=0.8136]Evaluating workloads:  73%|███████▎  | 8/11 [00:49<00:16,  5.56s/workload, balancedness=0.8491, avg=0.8175]Evaluating workloads:  82%|████████▏ | 9/11 [00:49<00:10,  5.38s/workload, balancedness=0.8491, avg=0.8175]Evaluating workloads:  82%|████████▏ | 9/11 [00:54<00:10,  5.38s/workload, balancedness=0.8902, avg=0.8248]Evaluating workloads:  91%|█████████ | 10/11 [00:54<00:05,  5.42s/workload, balancedness=0.8902, avg=0.8248]Evaluating workloads:  91%|█████████ | 10/11 [01:00<00:05,  5.42s/workload, balancedness=0.8092, avg=0.8234]Evaluating workloads: 100%|██████████| 11/11 [01:00<00:00,  5.35s/workload, balancedness=0.8092, avg=0.8234]Evaluating workloads: 100%|██████████| 11/11 [01:00<00:00,  5.46s/workload, balancedness=0.8092, avg=0.8234]
+Overall Balancedness: 0.823378
+  (Compute-only balancedness: 0.816838)
+  (Efficiency: 0.811740)
+  (Avg total elapsed time: 1938718.55)
+  (Evaluated on 11 workload pairs)
+{
+  "overall_balancedness": 0.8233775132372654,
+  "compute_balancedness": 0.8168379671981447,
+  "efficiency": 0.8117400100353849,
+  "avg_total_elapsed_time": 1938718.5504261365,
+  "num_workloads": 11,
+  "per_workload_scores": [
+    0.7879144302621565,
+    0.8632872044030975,
+    0.8612956270237287,
+    0.8492495770577408,
+    0.82784988124519,
+    0.7878515288920873,
+    0.7632355250032257,
+    0.7679125399489061,
+    0.8490799240501797,
+    0.8902385055403582,
+    0.8092379021832483
+  ]
+}

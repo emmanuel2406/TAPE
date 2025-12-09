@@ -18,7 +18,7 @@ NUM_GROUPS = 8
 NUM_GPUS = 32
 NUM_NODES = 4
 
-TAPE3 = False
+TAPE_VERSION = 4
 
 
 # Ratio of GPU-to-GPU communication cost within a node vs GPU-to-GPU communication cost between nodes
@@ -382,7 +382,7 @@ def evaluate(program_path: str) -> EvaluationResult:
             )
             end_raw_time = time.perf_counter()
             balancedness_score, communication_score = simulate_inference(log2phy, logcnt, workloads[i + 1])
-            if not TAPE3:
+            if TAPE_VERSION == 4:
                 weight_copy_score = calculate_weight_copy_cost(log2phy, logcnt)
                 weight_copy_scores.append(weight_copy_score)
             end_time = time.perf_counter()
@@ -395,11 +395,12 @@ def evaluate(program_path: str) -> EvaluationResult:
         avg_time = sum(times) / len(times)
         avg_raw_time = sum(raw_times) / len(raw_times)
         speed_score = 0.02 / avg_time
+        avg_weight_copy_score = 0.0
         print(f'avg_time: {avg_time}, avg_raw_time: {avg_raw_time}, speed_score: {speed_score}')
-        if TAPE3:
-            # Exclude weight_copy_score from combined score when TAPE3 is True
+        if TAPE_VERSION == 3:
             combined_score = (avg_balancedness_score + speed_score + avg_communication_score) / 3
-            avg_weight_copy_score = 0.0
+        elif TAPE_VERSION == 2:
+            combined_score = (avg_balancedness_score + avg_communication_score) / 2
         else:
             avg_weight_copy_score = sum(weight_copy_scores) / len(weight_copy_scores)
             combined_score = (avg_balancedness_score + speed_score + avg_communication_score + avg_weight_copy_score) / 4
